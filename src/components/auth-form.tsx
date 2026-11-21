@@ -32,10 +32,12 @@ export function AuthForm({ mode }: { mode: "login" | "cadastro" }) {
               type="password"
               className="field"
               autoComplete={mode === "login" ? "current-password" : "new-password"}
-              minLength={mode === "cadastro" ? 8 : undefined}
+              minLength={mode === "cadastro" ? 10 : undefined}
+              maxLength={72}
               required
             />
           </div>
+          {mode === "cadastro" && <p className="text-xs text-muted">Mínimo 10 caracteres, com letras e números.</p>}
           {state?.error && <p className="text-sm text-down">{state.error}</p>}
           <button disabled={pending} className="btn w-full">
             {pending ? "Aguarde…" : mode === "login" ? "Entrar" : "Criar conta"}

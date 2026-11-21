@@ -22,8 +22,22 @@ export const users = pgTable("users", {
   name: text("name").notNull(),
   email: text("email").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
+  // incrementar invalida todas as sessões abertas ("sair de todos os dispositivos")
+  sessionVersion: integer("session_version").default(1).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
+
+// Tentativas de login/cadastro, para bloquear ataques de força bruta
+export const authAttempts = pgTable(
+  "auth_attempts",
+  {
+    id: id(),
+    key: text("key").notNull(), // "login:email" ou "ip:1.2.3.4"
+    success: boolean("success").default(false).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => [index("auth_attempts_key_idx").on(t.key, t.createdAt)],
+);
 
 export const txType = pgEnum("tx_type", ["INCOME", "EXPENSE"]);
 

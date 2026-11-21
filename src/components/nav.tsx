@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { logoutEverywhere } from "@/app/actions";
 
 const ITEMS = [
   { href: "/", label: "Início", icon: "M3 11l9-8 9 8v9a1 1 0 01-1 1h-5v-6H9v6H4a1 1 0 01-1-1z" },
@@ -51,6 +52,9 @@ export function SideNav({ name }: { name: string }) {
         <div className="truncate px-2">Olá, {name}</div>
         <form action="/sair" method="post">
           <button className="mt-1 w-full rounded-lg px-2 py-1.5 text-left hover:bg-panel-2 hover:text-ink">Sair</button>
+        </form>
+        <form action={logoutEverywhere}>
+          <button className="w-full rounded-lg px-2 py-1.5 text-left text-[11px] hover:bg-panel-2 hover:text-ink">Sair de todos os aparelhos</button>
         </form>
       </div>
     </aside>

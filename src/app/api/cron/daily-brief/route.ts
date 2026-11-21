@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { generateDailyBrief } from "@/lib/brief";
 
@@ -10,7 +11,9 @@ export const maxDuration = 60;
  */
 export async function GET(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
-  if (!secret || req.headers.get("authorization") !== `Bearer ${secret}`) {
+  const got = Buffer.from(req.headers.get("authorization") ?? "");
+  const want = Buffer.from(`Bearer ${secret ?? ""}`);
+  if (!secret || secret.length < 16 || got.length !== want.length || !timingSafeEqual(got, want)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   const r = await generateDailyBrief();

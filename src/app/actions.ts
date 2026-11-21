@@ -7,47 +7,78 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { db, users, transactions, debts, holdings, goals, customSheets } from "@/db";
 import type { SheetCells } from "@/db/schema";
-import { createSession, destroySession, requireUser } from "@/lib/auth";
+import { checkRateLimit, clientIp, createSession, destroySession, recordAttempt, requireUser, revokeAllSessions } from "@/lib/auth";
 import { parseNumber, parseToCents } from "@/lib/money";
 
 export type FormState = { error?: string; ok?: boolean } | undefined;
 
-const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
-const dateNoon = (s: string) => new Date(`${s || new Date().toISOString().slice(0, 10)}T12:00:00Z`);
+// Toda entrada do usuário passa por aqui: corta espaços e limita o tamanho
+const str = (f: FormData, k: string, max = 200) => String(f.get(k) ?? "").trim().slice(0, max);
+const dateNoon = (s: string) => {
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(`${s}T12:00:00Z`) : new Date(`${new Date().toISOString().slice(0, 10)}T12:00:00Z`);
+  return Number.isNaN(d.getTime()) ? new Date() : d;
+};
+// Limite de valores: R$ 10 milhões por lançamento (evita estouro do inteiro no banco)
+const MAX_CENTS = 1_000_000_000;
+const money = (f: FormData, k: string) => Math.min(Math.max(parseToCents(str(f, k, 30)), 0), MAX_CENTS);
+const signedMoney = (f: FormData, k: string) => Math.max(Math.min(parseToCents(str(f, k, 30)), MAX_CENTS), -MAX_CENTS);
+
+// hash falso para comparar quando o e-mail não existe (resposta leva o mesmo tempo)
+const DUMMY_HASH = bcrypt.hashSync("senha-ficticia-para-tempo-constante", 12);
 
 // ---------- Autenticação ----------
 
 export async function register(_: FormState, f: FormData): Promise<FormState> {
+  if (process.env.ALLOW_SIGNUP === "false") return { error: "Cadastros estão fechados no momento." };
   const parsed = z
     .object({
-      name: z.string().min(2, "Nome muito curto"),
-      email: z.string().email("E-mail inválido"),
-      password: z.string().min(8, "A senha precisa de pelo menos 8 caracteres"),
+      name: z.string().min(2, "Nome muito curto").max(80, "Nome muito longo"),
+      email: z.string().email("E-mail inválido").max(254),
+      password: z
+        .string()
+        .min(10, "A senha precisa de pelo menos 10 caracteres")
+        .max(72, "Senha longa demais (máx. 72)")
+        .refine((p) => /[a-zA-Z]/.test(p) && /\d/.test(p), "Use letras e números na senha"),
     })
-    .safeParse({ name: str(f, "name"), email: str(f, "email").toLowerCase(), password: str(f, "password") });
+    .safeParse({ name: str(f, "name"), email: str(f, "email", 254).toLowerCase(), password: String(f.get("password") ?? "") });
   if (!parsed.success) return { error: parsed.error.issues[0].message };
 
+  const ip = await clientIp();
+  const blocked = await checkRateLimit(parsed.data.email, ip);
+  if (blocked) return { error: blocked };
+
   const exists = await db.query.users.findFirst({ where: eq(users.email, parsed.data.email) });
-  if (exists) return { error: "Já existe uma conta com esse e-mail" };
+  if (exists) {
+    await recordAttempt(parsed.data.email, ip, false);
+    return { error: "Não foi possível criar a conta com esse e-mail. Se já tem conta, faça login." };
+  }
 
   const [u] = await db
     .insert(users)
     .values({
       name: parsed.data.name,
       email: parsed.data.email,
-      passwordHash: await bcrypt.hash(parsed.data.password, 10),
+      passwordHash: await bcrypt.hash(parsed.data.password, 12),
     })
     .returning();
-  await createSession({ userId: u.id, name: u.name });
+  await recordAttempt(parsed.data.email, ip, true);
+  await createSession({ userId: u.id, name: u.name, v: u.sessionVersion });
   redirect("/");
 }
 
 export async function login(_: FormState, f: FormData): Promise<FormState> {
-  const email = str(f, "email").toLowerCase();
+  const email = str(f, "email", 254).toLowerCase();
+  const password = String(f.get("password") ?? "").slice(0, 72);
+  const ip = await clientIp();
+  const blocked = await checkRateLimit(email, ip);
+  if (blocked) return { error: blocked };
+
   const u = await db.query.users.findFirst({ where: eq(users.email, email) });
-  if (!u || !(await bcrypt.compare(str(f, "password"), u.passwordHash)))
-    return { error: "E-mail ou senha incorretos" };
-  await createSession({ userId: u.id, name: u.name });
+  const ok = await bcrypt.compare(password, u?.passwordHash ?? DUMMY_HASH);
+  await recordAttempt(email, ip, !!(u && ok));
+  if (!u || !ok) return { error: "E-mail ou senha incorretos" };
+
+  await createSession({ userId: u.id, name: u.name, v: u.sessionVersion });
   redirect("/");
 }
 
@@ -56,11 +87,19 @@ export async function logout() {
   redirect("/login");
 }
 
+/** Sai de todos os aparelhos (use se perder o celular ou suspeitar de acesso) */
+export async function logoutEverywhere() {
+  const { userId } = await requireUser();
+  await revokeAllSessions(userId);
+  await destroySession();
+  redirect("/login");
+}
+
 // ---------- Transações ----------
 
 export async function saveTransaction(_: FormState, f: FormData): Promise<FormState> {
   const { userId } = await requireUser();
-  const amountCents = parseToCents(str(f, "amount"));
+  const amountCents = money(f, "amount");
   if (amountCents <= 0) return { error: "Informe um valor maior que zero" };
   const description = str(f, "description");
   if (!description) return { error: "Informe uma descrição" };
@@ -88,6 +127,7 @@ export async function deleteTransaction(id: string) {
 /** Copia os lançamentos recorrentes do mês anterior para o mês informado */
 export async function copyRecurring(ym: string) {
   const { userId } = await requireUser();
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) return;
   const [y, m] = ym.split("-").map(Number);
   const prevStart = new Date(Date.UTC(y, m - 2, 1));
   const start = new Date(Date.UTC(y, m - 1, 1));
@@ -120,17 +160,17 @@ export async function saveDebt(_: FormState, f: FormData): Promise<FormState> {
   const { userId } = await requireUser();
   const name = str(f, "name");
   if (!name) return { error: "Dê um nome para a dívida" };
-  const balanceCents = parseToCents(str(f, "balance"));
+  const balanceCents = money(f, "balance");
   if (balanceCents <= 0) return { error: "Informe o saldo devedor" };
   const dueDay = Math.max(1, Math.min(31, Math.round(parseNumber(str(f, "dueDay")) || 10)));
   const values = {
     name,
     creditor: str(f, "creditor") || null,
     balanceCents,
-    monthlyInterestRate: parseNumber(str(f, "rate")),
-    minPaymentCents: parseToCents(str(f, "minPayment")),
+    monthlyInterestRate: Math.min(Math.max(parseNumber(str(f, "rate", 20)), 0), 100),
+    minPaymentCents: money(f, "minPayment"),
     dueDay,
-    notes: str(f, "notes") || null,
+    notes: str(f, "notes", 500) || null,
   };
   const id = str(f, "id");
   if (id) await db.update(debts).set(values).where(and(eq(debts.id, id), eq(debts.userId, userId)));
@@ -143,7 +183,7 @@ export async function saveDebt(_: FormState, f: FormData): Promise<FormState> {
 export async function payDebt(_: FormState, f: FormData): Promise<FormState> {
   const { userId } = await requireUser();
   const id = str(f, "id");
-  const amount = parseToCents(str(f, "amount"));
+  const amount = money(f, "amount");
   if (amount <= 0) return { error: "Valor inválido" };
   const d = await db.query.debts.findFirst({ where: and(eq(debts.id, id), eq(debts.userId, userId)) });
   if (!d) return { error: "Dívida não encontrada" };
@@ -180,16 +220,16 @@ export async function saveHolding(_: FormState, f: FormData): Promise<FormState>
   let ticker = str(f, "ticker");
   if (!ticker) return { error: "Informe o ativo" };
   ticker = kind === "CRYPTO" ? ticker.toLowerCase() : kind === "FIXED_INCOME" || kind === "STOCK_US" ? ticker : ticker.toUpperCase();
-  const quantity = parseNumber(str(f, "quantity")) || (kind === "FIXED_INCOME" ? 1 : 0);
-  if (quantity <= 0) return { error: "Quantidade inválida" };
+  const quantity = parseNumber(str(f, "quantity", 30)) || (kind === "FIXED_INCOME" ? 1 : 0);
+  if (quantity <= 0 || quantity > 1e12) return { error: "Quantidade inválida" };
   const manual = str(f, "manualValue");
   const values = {
     kind,
     ticker,
     name: str(f, "name") || null,
     quantity,
-    avgPriceCents: parseToCents(str(f, "avgPrice")),
-    manualValueCents: manual ? parseToCents(manual) : null,
+    avgPriceCents: money(f, "avgPrice"),
+    manualValueCents: manual ? money(f, "manualValue") : null,
   };
   const id = str(f, "id");
   if (id) await db.update(holdings).set(values).where(and(eq(holdings.id, id), eq(holdings.userId, userId)));
@@ -209,13 +249,13 @@ export async function deleteHolding(id: string) {
 export async function saveGoal(_: FormState, f: FormData): Promise<FormState> {
   const { userId } = await requireUser();
   const name = str(f, "name");
-  const targetCents = parseToCents(str(f, "target"));
+  const targetCents = money(f, "target");
   if (!name || targetCents <= 0) return { error: "Informe nome e valor-alvo" };
   const deadline = str(f, "deadline");
   const values = {
     name,
     targetCents,
-    currentCents: parseToCents(str(f, "current")),
+    currentCents: money(f, "current"),
     deadline: deadline ? dateNoon(deadline) : null,
   };
   const id = str(f, "id");
@@ -229,7 +269,7 @@ export async function depositGoal(_: FormState, f: FormData): Promise<FormState>
   const { userId } = await requireUser();
   const g = await db.query.goals.findFirst({ where: and(eq(goals.id, str(f, "id")), eq(goals.userId, userId)) });
   if (!g) return { error: "Meta não encontrada" };
-  const amount = parseToCents(str(f, "amount"));
+  const amount = money(f, "amount");
   await db.update(goals).set({ currentCents: Math.max(0, g.currentCents + amount) }).where(eq(goals.id, g.id));
   revalidatePath("/", "layout");
   return { ok: true };
@@ -245,6 +285,7 @@ export async function deleteGoal(id: string) {
 
 export async function createSheet(name: string) {
   const { userId } = await requireUser();
+  name = String(name).slice(0, 80);
   const [s] = await db
     .insert(customSheets)
     .values({
@@ -267,6 +308,7 @@ export async function createSheet(name: string) {
 export async function saveSheet(id: string, cells: SheetCells, name?: string) {
   const { userId } = await requireUser();
   const clean: SheetCells = {};
+  if (Object.keys(cells).length > 2000) throw new Error("Planilha grande demais");
   for (const [k, v] of Object.entries(cells)) if (/^[A-Z]\d{1,3}$/.test(k) && v !== "") clean[k] = String(v).slice(0, 500);
   await db
     .update(customSheets)
