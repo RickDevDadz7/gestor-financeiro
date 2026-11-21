@@ -31,6 +31,7 @@ export default async function Planilhas({ searchParams }: { searchParams: Promis
         {sheets.map((s) => (
           <Link
             key={s.key}
+            scroll={false}
             href={`?aba=${s.key}`}
             className={`shrink-0 rounded-lg px-3 py-1.5 text-sm ${s.key === active.key ? "bg-brand text-black" : "bg-panel text-muted hover:text-ink"}`}
           >

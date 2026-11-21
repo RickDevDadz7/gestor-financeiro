@@ -4,7 +4,7 @@ import { getDebts, getMonthTx, sumTx } from "@/lib/data";
 import { annualRate, daysUntil, nextDueDate, prioritize, severity, severityLabel, simulatePayoff, type Strategy } from "@/lib/debts";
 import { fmtBRL, parseToCents } from "@/lib/money";
 import { AddPanel, Badge, Card, Disclaimer, Empty, PageHeader, Stat } from "@/components/ui";
-import { DebtForm, DeleteButton, PayDebtForm } from "@/components/forms";
+import { DebtForm, DeleteButton, PayDebtForm, SimulatorInput } from "@/components/forms";
 
 const SEV_TONE = { critica: "down", alta: "warn", media: "muted", baixa: "up" } as const;
 
@@ -51,7 +51,7 @@ export default async function Dividas({ searchParams }: { searchParams: Promise<
             action={
               <div className="flex rounded-lg border border-line p-0.5 text-xs">
                 {(["avalanche", "snowball"] as const).map((s) => (
-                  <Link key={s} href={`?s=${s}`} className={`rounded-md px-2.5 py-1 ${strategy === s ? "bg-brand text-black" : "text-muted"}`}>
+                  <Link key={s} scroll={false} href={`?s=${s}${sp.extra !== undefined ? `&extra=${encodeURIComponent(sp.extra)}` : ""}`} className={`rounded-md px-2.5 py-1 ${strategy === s ? "bg-brand text-black" : "text-muted"}`}>
                     {s === "avalanche" ? "Avalanche" : "Bola de neve"}
                   </Link>
                 ))}
@@ -111,14 +111,7 @@ export default async function Dividas({ searchParams }: { searchParams: Promise<
 
         <div className="space-y-4">
           <Card title="Simulador de liberdade">
-            <form className="mb-4 flex items-end gap-2">
-              <input type="hidden" name="s" value={strategy} />
-              <div className="flex-1">
-                <label className="label">Extra por mês além do mínimo (R$)</label>
-                <input name="extra" inputMode="decimal" defaultValue={(extra / 100).toFixed(2).replace(".", ",")} className="field num" />
-              </div>
-              <button className="btn-ghost">Simular</button>
-            </form>
+            <SimulatorInput strategy={strategy} initial={(extra / 100).toFixed(2).replace(".", ",")} />
             {open.length === 0 ? (
               <Empty>Cadastre dívidas para simular.</Empty>
             ) : (

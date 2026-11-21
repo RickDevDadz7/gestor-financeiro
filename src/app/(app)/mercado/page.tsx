@@ -1,45 +1,68 @@
 import { requireUser } from "@/lib/auth";
 import { recentSnapshots } from "@/lib/data";
-import { marketOverview, type Quote } from "@/lib/market";
+import { marketOverview, type MarketData, type Quote } from "@/lib/market";
 import { fmtNumber } from "@/lib/money";
 import { Card, Change, Disclaimer, Empty, PageHeader } from "@/components/ui";
+import { MarketBrief } from "@/components/market-brief";
 import { generateNow } from "./actions";
 
 export default async function Mercado() {
   await requireUser();
   const [m, history] = await Promise.all([marketOverview(), recentSnapshots(10)]);
   const today = history[0];
+  const saved = (today?.data as MarketData | undefined)?.indicators;
+  const selic = m.indicators.selic ?? saved?.selic ?? null;
+  const cdi = m.indicators.cdi ?? saved?.cdi ?? null;
+  const ipca12m = m.indicators.ipca12m ?? saved?.ipca12m ?? null;
+  const realRate = selic !== null && ipca12m !== null ? ((1 + selic / 100) / (1 + ipca12m / 100) - 1) * 100 : null;
 
   return (
     <>
-      <PageHeader title="Mercado" subtitle="Bolsa, câmbio, cripto e juros — atualizado a cada 5 minutos.">
-        <form action={generateNow}>
-          <button className="btn-ghost">⚡ Gerar resumo agora</button>
-        </form>
-      </PageHeader>
+      <PageHeader title="Mercado" subtitle="Bolsa, câmbio, cripto e juros, traduzidos pra decisão." />
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Big label="Ibovespa" value={m.ibovespa ? `${fmtNumber(m.ibovespa.priceBRL, 0)} pts` : "—"} change={m.ibovespa?.changePct ?? null} />
-        {m.fx.map((f) => (
-          <Big key={f.symbol} label={f.symbol === "USD" ? "Dólar" : f.symbol === "EUR" ? "Euro" : f.symbol} value={`R$ ${fmtNumber(f.priceBRL, 3)}`} change={f.changePct} />
-        ))}
-        <Big label="Selic / CDI" value={m.indicators.selic !== null ? `${fmtNumber(m.indicators.selic)}%` : "—"} sub={m.indicators.cdi !== null ? `CDI ${fmtNumber(m.indicators.cdi)}% a.a.` : undefined} change={null} />
-      </div>
+      <div className="grid gap-4 lg:grid-cols-3">
+        <Card
+          title={today ? `Resumo de ${today.day.split("-").reverse().join("/")}` : "Resumo de agora"}
+          action={
+            <form action={generateNow}>
+              <button className="rounded-lg border border-line px-2.5 py-1 text-xs text-muted hover:text-ink">⚡ Atualizar</button>
+            </form>
+          }
+          className="lg:col-span-2"
+        >
+          {today ? (
+            <MarketBrief data={today.data as MarketData} summary={today.summary} />
+          ) : (
+            <MarketBrief data={m} summary="" />
+          )}
+        </Card>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-3">
-        <Card title={today ? `Resumo do dia · ${today.day.split("-").reverse().join("/")}` : "Resumo do dia"} className="lg:col-span-2">
-          {today ? <p className="whitespace-pre-line text-sm leading-relaxed">{today.summary}</p> : <Empty>Ainda sem resumo. Clique em “Gerar resumo agora”.</Empty>}
-        </Card>
-        <Card title="Cripto">
-          <QuoteList list={m.crypto} />
-        </Card>
+        <div className="space-y-4">
+          <Card title="Juros e inflação">
+            <dl className="grid grid-cols-3 gap-2 text-center">
+              <Rate label="Selic" v={selic} />
+              <Rate label="CDI" v={cdi} />
+              <Rate label="IPCA 12m" v={ipca12m} />
+            </dl>
+            {realRate !== null && (
+              <div className="mt-3 rounded-xl bg-brand/10 p-3 text-center">
+                <div className="text-[11px] text-muted">Juro real (acima da inflação)</div>
+                <div className="num text-xl font-bold text-brand">{fmtNumber(realRate, 1)}% a.a.</div>
+              </div>
+            )}
+          </Card>
+
+          <Card title="Cripto">
+            <QuoteList list={m.crypto.length ? m.crypto : ((today?.data as MarketData | undefined)?.crypto ?? [])} />
+          </Card>
+        </div>
       </div>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-3">
         <Card title="Ações e ETFs acompanhados" className="lg:col-span-2">
           <QuoteList list={m.stocks} grid />
           {m.stocks.length === 0 && (
-            <p className="text-xs text-muted">Sem dados da B3. Configure BRAPI_TOKEN no .env (token grátis em brapi.dev).</p>
+            <p className="text-xs text-muted">Sem dados da B3. Configure BRAPI_TOKEN (token grátis em brapi.dev).</p>
           )}
         </Card>
         <Card title="Resumos anteriores">
@@ -51,7 +74,9 @@ export default async function Mercado() {
                 <li key={s.id}>
                   <details>
                     <summary className="text-sm text-muted hover:text-ink">{s.day.split("-").reverse().join("/")}</summary>
-                    <p className="mt-2 whitespace-pre-line text-xs leading-relaxed">{s.summary}</p>
+                    <div className="mt-2">
+                      <MarketBrief data={s.data as MarketData} summary={s.summary} compact />
+                    </div>
                   </details>
                 </li>
               ))}
@@ -64,12 +89,11 @@ export default async function Mercado() {
   );
 }
 
-function Big({ label, value, change, sub }: { label: string; value: string; change: number | null; sub?: string }) {
+function Rate({ label, v }: { label: string; v: number | null }) {
   return (
-    <div className="rounded-2xl border border-line bg-panel p-4">
-      <div className="text-xs text-muted">{label}</div>
-      <div className="num mt-1 text-lg font-semibold">{value}</div>
-      {sub ? <div className="text-xs text-muted">{sub}</div> : <Change pct={change} className="text-xs" />}
+    <div className="rounded-xl bg-panel-2 py-2.5">
+      <dt className="text-[11px] text-muted">{label}</dt>
+      <dd className="num text-base font-semibold">{v !== null ? `${fmtNumber(v)}%` : "—"}</dd>
     </div>
   );
 }
@@ -79,12 +103,12 @@ function QuoteList({ list, grid }: { list: Quote[]; grid?: boolean }) {
   return (
     <ul className={grid ? "grid gap-x-6 sm:grid-cols-2" : ""}>
       {list.map((q) => (
-        <li key={q.symbol} className="flex items-center justify-between border-b border-line/60 py-2 text-sm last:border-0">
-          <div>
+        <li key={q.symbol} className="flex items-center justify-between gap-3 border-b border-line/60 py-2.5 text-sm last:border-0">
+          <div className="min-w-0">
             <div className="font-medium">{q.symbol.length > 6 ? q.name : q.symbol}</div>
-            {q.symbol.length <= 6 && <div className="max-w-40 truncate text-xs text-muted">{q.name}</div>}
+            {q.symbol.length <= 6 && <div className="truncate text-xs text-muted">{q.name}</div>}
           </div>
-          <div className="text-right">
+          <div className="shrink-0 text-right">
             <div className="num">R$ {fmtNumber(q.priceBRL, q.priceBRL > 1000 ? 0 : 2)}</div>
             <Change pct={q.changePct} className="text-xs" />
           </div>

@@ -16,9 +16,9 @@ export default async function Transacoes({ searchParams }: { searchParams: Promi
   return (
     <>
       <PageHeader title="Receitas e gastos" subtitle="Tudo que entra e sai. Lance na hora, leva 10 segundos.">
-        <Link href={`?m=${shiftMonth(ym, -1)}`} className="btn-ghost">‹</Link>
+        <Link scroll={false} href={`?m=${shiftMonth(ym, -1)}`} className="btn-ghost">‹</Link>
         <span className="min-w-36 text-center text-sm capitalize">{monthLabel(ym)}</span>
-        <Link href={`?m=${shiftMonth(ym, 1)}`} className="btn-ghost">›</Link>
+        <Link scroll={false} href={`?m=${shiftMonth(ym, 1)}`} className="btn-ghost">›</Link>
       </PageHeader>
 
       <div className="grid grid-cols-3 gap-3">

@@ -1,32 +1,13 @@
 import "server-only";
+import { analyzeMarket } from "./market-insights";
+export type { Quote, MarketData, Indicators } from "./market-insights";
 // Cotações de fontes gratuitas:
 // - CoinGecko (cripto)            https://www.coingecko.com/api
 // - brapi.dev (B3: ações, FIIs)   https://brapi.dev  (token grátis em BRAPI_TOKEN)
 // - AwesomeAPI (câmbio)           https://docs.awesomeapi.com.br
 // - Banco Central SGS (Selic/CDI/IPCA)
 
-export type Quote = {
-  symbol: string;
-  name: string;
-  priceBRL: number;
-  changePct: number | null; // variação no dia
-  source: string;
-};
-
-export type Indicators = {
-  selic: number | null; // % a.a.
-  cdi: number | null; // % a.a.
-  ipca12m: number | null; // %
-};
-
-export type MarketData = {
-  fetchedAt: string;
-  ibovespa: Quote | null;
-  fx: Quote[]; // USD, EUR
-  crypto: Quote[];
-  stocks: Quote[];
-  indicators: Indicators;
-};
+import type { Quote, MarketData, Indicators } from "./market-insights";
 
 const REVALIDATE = 300; // 5 min de cache
 
@@ -57,7 +38,7 @@ export async function cryptoQuotes(ids: string[]): Promise<Quote[]> {
     .filter((id) => data[id]?.brl !== undefined)
     .map((id) => ({
       symbol: id,
-      name: id.charAt(0).toUpperCase() + id.slice(1),
+      name: id.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" "),
       priceBRL: data[id].brl!,
       changePct: data[id].brl_24h_change ?? null,
       source: "CoinGecko",
@@ -102,14 +83,34 @@ export async function fxQuotes(): Promise<Quote[]> {
   const data = await getJSON<AwesomeResp>(
     "https://economia.awesomeapi.com.br/json/last/USD-BRL,EUR-BRL",
   );
-  if (!data) return [];
-  return Object.entries(data).map(([k, v]) => ({
-    symbol: k.replace("BRL", ""),
-    name: v.name?.split("/")[0] ?? k,
-    priceBRL: Number(v.bid),
-    changePct: Number(v.pctChange),
-    source: "AwesomeAPI",
-  }));
+  if (data && Object.keys(data).length) {
+    return Object.entries(data).map(([k, v]) => ({
+      symbol: k.replace("BRL", ""),
+      name: k.startsWith("USD") ? "Dólar" : k.startsWith("EUR") ? "Euro" : k,
+      priceBRL: Number(v.bid),
+      changePct: Number(v.pctChange),
+      source: "AwesomeAPI",
+    }));
+  }
+  // Reserva: PTAX do Banco Central (diária, calcula a variação com o dia anterior)
+  const ptax = async (code: number, symbol: string, name: string): Promise<Quote | null> => {
+    const rows = await getJSON<{ valor: string }[]>(
+      `https://api.bcb.gov.br/dados/serie/bcdata.sgs.${code}/dados/ultimos/2?formato=json`,
+      3600,
+    );
+    if (!rows?.length) return null;
+    const last = Number(rows[rows.length - 1].valor);
+    const prev = rows.length > 1 ? Number(rows[0].valor) : null;
+    return {
+      symbol,
+      name,
+      priceBRL: last,
+      changePct: prev ? ((last - prev) / prev) * 100 : null,
+      source: "Banco Central (PTAX)",
+    };
+  };
+  const r = await Promise.all([ptax(1, "USD", "Dólar"), ptax(21619, "EUR", "Euro")]);
+  return r.filter((q): q is Quote => q !== null);
 }
 
 async function sgs(code: number): Promise<number | null> {
@@ -154,38 +155,8 @@ export async function marketOverview(): Promise<MarketData> {
 
 /** Resumo em texto sem IA — usado quando ANTHROPIC_API_KEY não está configurada */
 export function ruleBasedSummary(m: MarketData): string {
-  const lines: string[] = [];
-  const pct = (n: number | null) =>
-    n === null ? "s/ var." : `${n > 0 ? "+" : ""}${n.toFixed(2).replace(".", ",")}%`;
-  const money = (n: number) => n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-
-  if (m.ibovespa) {
-    const c = m.ibovespa.changePct ?? 0;
-    const mood = c > 1 ? "dia forte" : c > 0 ? "leve alta" : c > -1 ? "leve queda" : "dia de queda forte";
-    lines.push(`Ibovespa: ${m.ibovespa.priceBRL.toLocaleString("pt-BR")} pts (${pct(c)}) — ${mood}.`);
-  }
-  for (const f of m.fx) lines.push(`${f.symbol}: ${money(f.priceBRL)} (${pct(f.changePct)}).`);
-  if (m.crypto.length)
-    lines.push(
-      "Cripto: " + m.crypto.map((c) => `${c.name} ${money(c.priceBRL)} (${pct(c.changePct)})`).join(" · ") + ".",
-    );
-  if (m.stocks.length) {
-    const sorted = [...m.stocks].sort((a, b) => (b.changePct ?? 0) - (a.changePct ?? 0));
-    const best = sorted[0];
-    const worst = sorted[sorted.length - 1];
-    lines.push(`Destaque de alta: ${best.symbol} (${pct(best.changePct)}). Maior queda: ${worst.symbol} (${pct(worst.changePct)}).`);
-  }
-  const { selic, ipca12m } = m.indicators;
-  if (selic !== null) {
-    const real = ipca12m !== null ? ((1 + selic / 100) / (1 + ipca12m / 100) - 1) * 100 : null;
-    lines.push(
-      `Selic ${selic.toFixed(2).replace(".", ",")}% a.a.` +
-        (ipca12m !== null ? `, IPCA 12m ${ipca12m.toFixed(2).replace(".", ",")}%` : "") +
-        (real !== null ? ` → juro real ~${real.toFixed(1).replace(".", ",")}% a.a. Renda fixa pós-fixada segue ${real > 5 ? "muito atrativa" : real > 3 ? "atrativa" : "menos atrativa"}.` : "."),
-    );
-  }
-  if (!lines.length) return "Não foi possível buscar dados do mercado hoje.";
-  return lines.join("\n");
+  const a = analyzeMarket(m);
+  return [a.headline, ...a.takeaways].join("\n");
 }
 
 /** Resumo escrito pelo Claude (opcional) */

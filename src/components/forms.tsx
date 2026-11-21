@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState, useEffect, useRef, useTransition } from "react";
+import { useActionState, useEffect, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import {
   saveTransaction,
   saveDebt,
@@ -283,5 +284,27 @@ export function CopyRecurringButton({ ym }: { ym: string }) {
     <button type="button" disabled={pending} className="btn-ghost" onClick={() => start(() => copyRecurring(ym))}>
       {pending ? "Copiando…" : "↻ Puxar fixos do mês anterior"}
     </button>
+  );
+}
+
+/** Simulador sem recarregar a página (mantém a posição da tela) */
+export function SimulatorInput({ strategy, initial }: { strategy: string; initial: string }) {
+  const router = useRouter();
+  const [v, setV] = useState(initial);
+  const [pending, start] = useTransition();
+  return (
+    <form
+      className="mb-4 flex items-end gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        start(() => router.replace(`?s=${strategy}&extra=${encodeURIComponent(v)}`, { scroll: false }));
+      }}
+    >
+      <div className="flex-1">
+        <label className="label">Extra por mês além do mínimo (R$)</label>
+        <input value={v} onChange={(e) => setV(e.target.value)} inputMode="decimal" className="field num" />
+      </div>
+      <button disabled={pending} className="btn-ghost">{pending ? "…" : "Simular"}</button>
+    </form>
   );
 }

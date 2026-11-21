@@ -6,6 +6,8 @@ import { daysUntil, nextDueDate, prioritize } from "@/lib/debts";
 import { fmtBRL, monthLabel, todayBR } from "@/lib/money";
 import { Badge, Card, Disclaimer, Empty, Progress, Stat } from "@/components/ui";
 import { CashflowChart, CategoryBars } from "@/components/charts";
+import { MarketBrief } from "@/components/market-brief";
+import type { MarketData } from "@/lib/market-insights";
 
 export default async function Dashboard() {
   const { userId, name } = await requireUser();
@@ -135,12 +137,9 @@ export default async function Dashboard() {
 
         <Card title="Mercado hoje" action={<Link href="/mercado" className="text-xs text-brand">detalhes</Link>}>
           {snap ? (
-            <>
-              <div className="mb-2 text-xs text-muted">Resumo de {snap.day.split("-").reverse().join("/")}</div>
-              <p className="line-clamp-[8] whitespace-pre-line text-sm leading-relaxed">{snap.summary}</p>
-            </>
+            <MarketBrief data={snap.data as MarketData} summary={snap.summary} compact />
           ) : (
-            <Empty>O primeiro resumo diário aparece aqui depois que o cron rodar (ou clique em “Gerar agora” na aba Mercado).</Empty>
+            <Empty>O primeiro resumo diário aparece aqui depois que o cron rodar (ou clique em “Atualizar” na aba Mercado).</Empty>
           )}
         </Card>
       </div>
