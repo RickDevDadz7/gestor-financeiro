@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 import { logoutEverywhere } from "@/app/actions";
 
 const ITEMS = [
@@ -14,9 +15,9 @@ const ITEMS = [
   { href: "/planilhas", label: "Planilhas", icon: "M3 3h18v18H3zM3 9h18M3 15h18M9 3v18" },
 ];
 
-function Icon({ d }: { d: string }) {
+function Icon({ d, size = "h-5 w-5", stroke = 1.8 }: { d: string; size?: string; stroke?: number }) {
   return (
-    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+    <svg viewBox="0 0 24 24" className={size} fill="none" stroke="currentColor" strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round">
       <path d={d} />
     </svg>
   );
@@ -61,23 +62,87 @@ export function SideNav({ name }: { name: string }) {
   );
 }
 
+// No celular: 4 abas principais + "Mais" (painel que sobe com o resto)
+const PRIMARY = ["/", "/transacoes", "/dividas", "/investimentos"];
+const MORE_ICON = "M5 12h.01M12 12h.01M19 12h.01";
+
 export function BottomNav() {
   const path = usePathname();
+  const [open, setOpen] = useState(false);
   const active = (h: string) => (h === "/" ? path === "/" : path.startsWith(h));
+  const primary = ITEMS.filter((i) => PRIMARY.includes(i.href));
+  const more = ITEMS.filter((i) => !PRIMARY.includes(i.href));
+  const moreActive = more.some((i) => active(i.href));
+
+  // fecha o painel ao trocar de página e com a tecla Esc
+  useEffect(() => setOpen(false), [path]);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = "";
+    };
+  }, [open]);
+
   return (
-    <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-panel/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden">
-      <div className="grid grid-cols-7">
-        {ITEMS.map((i) => (
-          <Link
-            key={i.href}
-            href={i.href}
-            className={`flex flex-col items-center gap-0.5 py-2 text-[10px] ${active(i.href) ? "text-brand" : "text-muted"}`}
+    <>
+      {open && (
+        <div className="fixed inset-0 z-50 md:hidden" role="dialog" aria-modal="true" aria-label="Mais opções">
+          <button aria-label="Fechar" className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setOpen(false)} />
+          <div className="absolute inset-x-0 bottom-0 rounded-t-3xl border-t border-line bg-panel p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl">
+            <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-line" />
+            <div className="grid grid-cols-3 gap-2">
+              {more.map((i) => (
+                <Link
+                  key={i.href}
+                  href={i.href}
+                  className={`flex flex-col items-center gap-1.5 rounded-2xl py-4 text-xs ${
+                    active(i.href) ? "bg-brand/15 text-brand" : "bg-panel-2 text-ink"
+                  }`}
+                >
+                  <Icon d={i.icon} size="h-6 w-6" />
+                  {i.label}
+                </Link>
+              ))}
+            </div>
+            <div className="mt-4 flex items-center justify-between border-t border-line pt-3 text-sm">
+              <form action="/sair" method="post">
+                <button className="rounded-lg px-3 py-2 text-muted hover:text-ink">Sair</button>
+              </form>
+              <form action={logoutEverywhere}>
+                <button className="rounded-lg px-3 py-2 text-xs text-muted hover:text-ink">Sair de todos os aparelhos</button>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-panel/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden">
+        <div className="grid grid-cols-5">
+          {primary.map((i) => (
+            <Link
+              key={i.href}
+              href={i.href}
+              className={`flex flex-col items-center gap-0.5 py-2.5 text-[11px] ${active(i.href) ? "text-brand" : "text-muted"}`}
+            >
+              <Icon d={i.icon} size="h-6 w-6" />
+              {i.label}
+            </Link>
+          ))}
+          <button
+            type="button"
+            onClick={() => setOpen((o) => !o)}
+            aria-expanded={open}
+            className={`flex flex-col items-center gap-0.5 py-2.5 text-[11px] ${open || moreActive ? "text-brand" : "text-muted"}`}
           >
-            <Icon d={i.icon} />
-            {i.label}
-          </Link>
-        ))}
-      </div>
-    </nav>
+            <Icon d={MORE_ICON} size="h-6 w-6" stroke={3.2} />
+            Mais
+          </button>
+        </div>
+      </nav>
+    </>
   );
 }
